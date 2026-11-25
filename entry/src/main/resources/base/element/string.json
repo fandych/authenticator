@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Authenticator application module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Manage authenticator accounts and one-time passwords"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Authenticator"
+    }
+  ]
+}

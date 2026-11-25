@@ -1,0 +1,23 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# Local signing materials and backups
+/certs/
+/temp/
+/build-profile.json5
+*.p12
+*.csr
+*.stratum
+
+# Original image input; app-ready icon assets are in AppScope/resources
+/IMG_20261125_072816.png

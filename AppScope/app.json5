@@ -1,0 +1,11 @@
+{
+  "app": {
+    "bundleName": "com.fandy.authenticator",
+    "vendor": "Fandy Chen",
+    "versionCode": 1000000,
+    "versionName": "1.0.0",
+    "buildVersion": "1",
+    "icon": "$media:logo_1024x1024",
+    "label": "$string:app_name"
+  }
+}
