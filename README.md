@@ -1,4 +1,4 @@
-# Authenticator
+# FUN Authenticator
 
 A native HarmonyOS phone port based on the behavior and backup format of [Stratum Authenticator](https://github.com/stratumauth/app). This project targets phones and tablets; the upstream Wear OS companion is not included.
 
@@ -6,15 +6,15 @@ A native HarmonyOS phone port based on the behavior and backup format of [Stratu
 
 - TOTP and HOTP using SHA-1, SHA-256, or SHA-512, plus mOTP, Steam Guard, and Yandex OTP.
 - Manual setup, QR scanning, and account QR display for `otpauth://`, `motp://`, and Google Authenticator migration URIs.
-- Material 3-inspired account cards, bottom app bar/FAB, category and action sheets, and sorting.
+- HarmonyOS-styled account lists, native settings rows, adaptive colors, category and action menus, and sorting.
 - Search, categories, custom ordering, default/compact/tile views, code grouping, dark mode, and tap-to-copy with toast feedback.
 - Android's 793-light/237-dark service icon catalog, Stratum icon-pack import and management, account icon selection, and custom image icons.
 - Direct backup import from andOTP, FreeOTP, FreeOTP+, Aegis, Bitwarden, Ente Auth, Proton Authenticator, WinAuth, 2FAS, KeePass, LastPass, TOTP Authenticator, Authenticator Plus, and URI-list files.
-- Android `.stratum` backup import (plain JSON and supported encrypted headers), plus encrypted `.authpro` import/export for the current Argon2id/AES-GCM and legacy PBKDF2/AES-CBC formats.
+- Encrypted FUN `.funbackup` export and restore using Argon2id/AES-GCM; legacy `.authpro` and Stratum backups remain available as separate import paths.
 - Backup imports merge with the local vault; an existing authenticator with the same secret is updated rather than deleting unrelated local records.
 - Offline code generation. No Internet permission is requested.
 
-Strong-backup Argon2id retains its 64 MiB/three-iteration/four-lane parameters and uses the native Rust binding for faster derivation. Large backup JSON parsing runs in HarmonyOS TaskPool, and legacy PBKDF2 uses the asynchronous CryptoKit API.
+FUN backups use a versioned, app-specific encrypted envelope. Argon2id retains its 64 MiB/three-iteration/four-lane parameters and uses the native Rust binding for faster derivation. Legacy backup JSON parsing runs in HarmonyOS TaskPool, and legacy PBKDF2 uses the asynchronous CryptoKit API.
 
 Account data is stored in the application's private preferences area. HarmonyOS system backup/restore is disabled so that secrets are not included in an unencrypted system backup. The app encrypts exported backups; it does not currently encrypt the local preferences file with a separate user password.
 

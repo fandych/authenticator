@@ -1,7 +1,8 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { decryptAuthPro, encryptAuthPro, encryptLegacyAuthPro } from '../main/ets/model/backup';
+import { decryptAuthPro, decryptFunBackup, encryptAuthPro, encryptFunBackup, encryptLegacyAuthPro } from '../main/ets/model/backup';
 import { AuthenticatorRecord, AuthenticatorType, computeMotp, computeOtp, createAuthenticator, emptyVault, parseOtpUri, utf8Bytes } from '../main/ets/model/otp';
 import { parseGoogleMigrationUri } from '../main/ets/model/migration';
+import util from '@ohos.util';
 
 function testAuthenticator(type: AuthenticatorType, secret: string): AuthenticatorRecord {
   const record = createAuthenticator(type);
@@ -89,6 +90,27 @@ export default function localUnitTest() {
       const restoredLegacy = await decryptAuthPro(legacy, 'test-only-password');
       expect(restoredLegacy.authenticators.length).assertEqual(1);
       expect(restoredLegacy.authenticators[0].issuer).assertEqual(record.issuer);
+    });
+
+    it('round-trips encrypted FUN backups with a distinct versioned header', 0, async () => {
+      const source = emptyVault();
+      const record = testAuthenticator('TOTP', 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+      record.issuer = 'FUN backup account';
+      record.categoryId = 'favorites';
+      source.authenticators.push(record);
+      source.categories.push({ id: 'favorites', name: 'Favorites', ranking: 0 });
+      source.customIcons.push({ id: 'custom-1', data: 'data' });
+      const backup = await encryptFunBackup(source, 'test-only-password');
+      expect(new util.TextDecoder('utf-8').decodeToString(backup.subarray(0, 16)))
+        .assertEqual('FUNAUTHENTICATOR');
+
+      const restored = await decryptFunBackup(backup, 'test-only-password');
+      expect(restored.authenticators.length).assertEqual(1);
+      expect(restored.authenticators[0].issuer).assertEqual(record.issuer);
+      expect(restored.authenticators[0].secret).assertEqual(record.secret);
+      expect(restored.authenticators[0].categoryId).assertEqual('favorites');
+      expect(restored.categories[0].name).assertEqual('Favorites');
+      expect(restored.customIcons[0].id).assertEqual('custom-1');
     });
 
     it('imports unencrypted JSON without asking for a password', 0, async () => {

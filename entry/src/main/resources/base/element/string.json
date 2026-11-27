@@ -2,15 +2,15 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "Authenticator application module"
+      "value": "FUN Authenticator"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "Manage authenticator accounts and one-time passwords"
+      "value": "Manage one-time password accounts and codes"
     },
     {
       "name": "EntryAbility_label",
-      "value": "Authenticator"
+      "value": "FUN Auth"
     }
   ]
 }

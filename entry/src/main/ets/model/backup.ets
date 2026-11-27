@@ -1,11 +1,15 @@
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { taskpool } from '@kit.ArkTS';
+import util from '@ohos.util';
 import { AuthenticatorCategory, AuthenticatorType, OtpAlgorithm, utf8Bytes, VaultData } from './otp';
 import { parseAuthProBackup } from './backupParser';
 import { ohosArgon2 } from 'kdbxweb/src/main/ets/crypto/argon2-rs';
 
 const STRONG_HEADER = 'AUTHENTICATORPRO';
 const LEGACY_HEADER = 'AuthenticatorPro';
+const FUN_HEADER = 'FUNAUTHENTICATOR';
+const FUN_BACKUP_FORMAT = 'fun-authenticator-backup';
+const FUN_BACKUP_VERSION = 1;
 const MAX_BACKUP_SIZE = 16 * 1024 * 1024;
 const BACKGROUND_PARSE_THRESHOLD = 64 * 1024;
 
@@ -14,6 +18,31 @@ function parseBackupTask(cleartextBuffer: ArrayBuffer): Object {
   const cleartext = new Uint8Array(cleartextBuffer);
   try {
     return parseAuthProBackup(cleartext);
+  } finally {
+    cleartext.fill(0);
+  }
+}
+
+@Concurrent
+function parseFunBackupTask(cleartextBuffer: ArrayBuffer): Object {
+  const cleartext = new Uint8Array(cleartextBuffer);
+  try {
+    const format = 'fun-authenticator-backup';
+    const version = 1;
+    const parsed = JSON.parse(new util.TextDecoder('utf-8').decodeToString(cleartext)) as Record<string, Object>;
+    if (parsed['format'] !== format || Number(parsed['version']) !== version) {
+      throw new Error('The selected FUN backup has an unsupported format or version.');
+    }
+    const data = parsed['data'];
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+      throw new Error('The selected FUN backup does not contain valid vault data.');
+    }
+    const vaultBytes = utf8Bytes(JSON.stringify(data));
+    try {
+      return parseAuthProBackup(vaultBytes);
+    } finally {
+      vaultBytes.fill(0);
+    }
   } finally {
     cleartext.fill(0);
   }
@@ -56,6 +85,99 @@ interface BackupDocument {
   Categories: Array<BackupCategory>;
   AuthenticatorCategories: Array<BackupAuthenticatorCategory>;
   CustomIcons: Array<BackupCustomIcon>;
+}
+
+interface FunBackupDocument {
+  format: string;
+  version: number;
+  exportedAt: string;
+  data: BackupDocument;
+}
+
+export async function decryptFunBackup(data: Uint8Array, password: string): Promise<VaultData> {
+  if (data.length > MAX_BACKUP_SIZE) {
+    throw new Error('The selected backup is too large.');
+  }
+  if (!hasPrefix(data, utf8Bytes(FUN_HEADER))) {
+    return await decryptAuthPro(data, password);
+  }
+  if (password.length === 0) {
+    throw new Error('Enter the backup password.');
+  }
+  if (data.length < FUN_HEADER.length + 16 + 12 + 16) {
+    throw new Error('The selected FUN backup is incomplete.');
+  }
+  const salt = data.subarray(FUN_HEADER.length, FUN_HEADER.length + 16);
+  const iv = data.subarray(FUN_HEADER.length + 16, FUN_HEADER.length + 28);
+  const ciphertextAndTag = data.subarray(FUN_HEADER.length + 28);
+  const ciphertext = ciphertextAndTag.subarray(0, ciphertextAndTag.length - 16);
+  const tag = ciphertextAndTag.subarray(ciphertextAndTag.length - 16);
+  const key = await deriveStrongBackupKey(password, salt);
+  let cleartext: Uint8Array | undefined;
+  try {
+    cleartext = await decryptGcm(key, iv, ciphertext, tag);
+    return await parseFunBackupOffThread(cleartext);
+  } finally {
+    key.fill(0);
+    cleartext?.fill(0);
+  }
+}
+
+export async function encryptFunBackup(vault: VaultData, password: string): Promise<Uint8Array> {
+  if (password.length === 0) {
+    throw new Error('Enter a password for the backup.');
+  }
+  const document: FunBackupDocument = {
+    format: FUN_BACKUP_FORMAT,
+    version: FUN_BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    data: createBackupDocument(vault)
+  };
+  const cleartext = utf8Bytes(JSON.stringify(document));
+  if (cleartext.length + FUN_HEADER.length + 16 + 12 + 16 > MAX_BACKUP_SIZE) {
+    cleartext.fill(0);
+    throw new Error('The FUN backup is too large to export.');
+  }
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = await deriveStrongBackupKey(password, salt);
+  try {
+    const encrypted = await encryptGcm(key, iv, cleartext);
+    return concatBytes(utf8Bytes(FUN_HEADER), salt, iv, encrypted);
+  } finally {
+    key.fill(0);
+    cleartext.fill(0);
+  }
+}
+
+function parseFunBackup(cleartext: Uint8Array): VaultData {
+  const parsed = JSON.parse(new util.TextDecoder('utf-8').decodeToString(cleartext)) as Record<string, Object>;
+  if (parsed['format'] !== FUN_BACKUP_FORMAT || Number(parsed['version']) !== FUN_BACKUP_VERSION) {
+    throw new Error('The selected FUN backup has an unsupported format or version.');
+  }
+  const data = parsed['data'];
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error('The selected FUN backup does not contain valid vault data.');
+  }
+  const vaultBytes = utf8Bytes(JSON.stringify(data));
+  try {
+    return parseAuthProBackup(vaultBytes);
+  } finally {
+    vaultBytes.fill(0);
+  }
+}
+
+async function parseFunBackupOffThread(cleartext: Uint8Array): Promise<VaultData> {
+  if (cleartext.length < BACKGROUND_PARSE_THRESHOLD) {
+    return parseFunBackup(cleartext);
+  }
+  const buffer = new ArrayBuffer(cleartext.length);
+  new Uint8Array(buffer).set(cleartext);
+  const result: Object = await taskpool.execute(parseFunBackupTask, buffer);
+  if (!isVaultData(result)) {
+    throw new Error('The selected FUN backup could not be parsed.');
+  }
+  return result as VaultData;
 }
 
 export async function decryptAuthPro(data: Uint8Array, password: string): Promise<VaultData> {

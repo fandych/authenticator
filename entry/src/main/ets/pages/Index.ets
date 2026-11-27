@@ -4,12 +4,12 @@ import { fileIo, picker } from '@kit.CoreFileKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { AuthenticatorCategory, AuthenticatorPatch, AuthenticatorRecord, AuthenticatorType, authenticatorUri, categoryIdForName, computeOtp, copyAuthenticator, copyVault, createAuthenticator, emptyVault, mergeVaults, OtpAlgorithm, parseOtpUri, patchAuthenticator, utf8Bytes, validateAuthenticator, VaultData } from '../model/otp';
 import { parseGoogleMigrationUri } from '../model/migration';
-import { decryptAuthPro, encryptAuthPro } from '../model/backup';
+import { decryptAuthPro, decryptFunBackup, encryptFunBackup } from '../model/backup';
 import { AppPreferences, AuthenticatorSortMode, AuthenticatorViewMode, VaultStore } from '../model/store';
 import { IconPack, IconPackEntry, parseStratumIconPack } from '../model/iconpack';
 import { DEFAULT_ICON_KEYS } from '../model/iconcatalog';
 import { hasDarkIcon, iconKeyForIssuer, isDefaultIconKey } from '../model/iconresolver';
-import { convertExternalBackup, EXTERNAL_IMPORT_OPTIONS, ExternalImportFormat, ExternalImportOption, ImportPasswordRequiredError, labelForFormat } from '../model/imports';
+import { convertExternalBackup, EXTERNAL_IMPORT_OPTIONS, ExternalImportFormat, ImportPasswordRequiredError, labelForFormat } from '../model/imports';
 import { sha1 } from '@noble/hashes/legacy.js';
 import util from '@ohos.util';
 
@@ -31,10 +31,12 @@ struct Index {
   @State private searchText: string = '';
   @State private selectedCategoryId: string = '';
   @State private showSettings: boolean = false;
+  @State private showCategoryMenu: boolean = false;
   @State private showMainMenu: boolean = false;
   @State private showAddMenu: boolean = false;
   @State private showSortMenu: boolean = false;
   @State private showImportMenu: boolean = false;
+  @State private showGuide: boolean = false;
   @State private accountMenuId: string = '';
   @State private reorderId: string = '';
   @State private categoryAssignmentId: string = '';
@@ -62,6 +64,7 @@ struct Index {
   @State private editingId: string = '';
   @State private uriText: string = '';
   @State private categoryName: string = '';
+  @State private assignmentCategoryName: string = '';
   @State private password: string = '';
   @State private backupAction: string = '';
   @State private pendingBackupUri: string = '';
@@ -125,31 +128,31 @@ struct Index {
   }
 
   private pageColor(): string {
-    return this.darkMode ? '#121416' : '#F6FAFE';
+    return this.darkMode ? '#111418' : '#F1F3F5';
   }
 
   private surfaceColor(): string {
-    return this.darkMode ? '#25282C' : '#F0F4F8';
+    return this.darkMode ? '#202327' : '#FFFFFF';
   }
 
   private primaryTextColor(): string {
-    return this.darkMode ? '#E1E2E9' : '#181C1F';
+    return this.darkMode ? '#E8EAED' : '#202124';
   }
 
   private secondaryTextColor(): string {
-    return this.darkMode ? '#C1C7CE' : '#41484D';
+    return this.darkMode ? '#BDC1C6' : '#5F6368';
   }
 
   private primaryColor(): string {
-    return this.darkMode ? '#91CEF4' : '#1E6586';
+    return this.darkMode ? '#7AB8FF' : '#0A59F7';
   }
 
-  private primaryContainerColor(): string {
-    return this.darkMode ? '#004C6A' : '#C5E7FF';
+  private accentSoftColor(): string {
+    return this.darkMode ? '#173A63' : '#DCEBFA';
   }
 
-  private onPrimaryContainerColor(): string {
-    return this.darkMode ? '#C5E7FF' : '#001E2D';
+  private onAccentSoftColor(): string {
+    return this.darkMode ? '#E1F0FF' : '#003B71';
   }
 
   private async saveVault(vault: VaultData = this.vault): Promise<void> {
@@ -281,6 +284,16 @@ struct Index {
     this.showTypeOptions = false;
     this.showEditor = true;
     this.statusMessage = '';
+  }
+
+  private openUriEditor(): void {
+    this.openNewEditor();
+    this.showAdvancedOptions = true;
+  }
+
+  private openGuide(): void {
+    this.showAddMenu = false;
+    this.showGuide = true;
   }
 
   private openEditEditor(item: AuthenticatorRecord): void {
@@ -497,7 +510,7 @@ struct Index {
       }
       const documentPicker = new picker.DocumentViewPicker(this.context);
       const uris = await documentPicker.select({
-        fileSuffixFilters: ['authpro', 'stratum', 'json'],
+        fileSuffixFilters: ['funbackup', 'authpro'],
         maxSelectNumber: 1
       });
       if (uris.length === 0) {
@@ -505,6 +518,37 @@ struct Index {
       }
       this.pendingBackupUri = uris[0];
       this.backupAction = 'import';
+      this.password = '';
+      this.showPasswordDialog = true;
+      this.statusMessage = '';
+    } catch (error) {
+      this.statusMessage = this.errorMessage(error);
+    } finally {
+      this.isBackupBusy = false;
+      this.busyMessage = '';
+    }
+  }
+
+  private async chooseStratumFile(): Promise<void> {
+    if (this.isBackupBusy || this.isIconPackBusy) {
+      return;
+    }
+    this.isBackupBusy = true;
+    this.busyMessage = '正在选择 Stratum 备份…';
+    try {
+      if (this.context === null) {
+        throw new Error('Unable to access the application context.');
+      }
+      const documentPicker = new picker.DocumentViewPicker(this.context);
+      const uris = await documentPicker.select({
+        fileSuffixFilters: ['stratum', 'json'],
+        maxSelectNumber: 1
+      });
+      if (uris.length === 0) {
+        return;
+      }
+      this.pendingBackupUri = uris[0];
+      this.backupAction = 'stratumImport';
       this.password = '';
       this.showPasswordDialog = true;
       this.statusMessage = '';
@@ -634,6 +678,8 @@ struct Index {
     this.showPasswordDialog = false;
     if (this.backupAction === 'import') {
       await this.restoreFromBackup(passwordValue);
+    } else if (this.backupAction === 'stratumImport') {
+      await this.restoreStratumFile(passwordValue);
     } else if (this.backupAction === 'export') {
       await this.exportBackup(passwordValue);
     } else if (this.backupAction === 'externalImport') {
@@ -654,6 +700,30 @@ struct Index {
         throw new Error('Choose a backup file first.');
       }
       bytes = this.readFile(this.pendingBackupUri);
+      this.pendingRestoreVault = await decryptFunBackup(bytes, passwordValue);
+      this.showRestoreDialog = true;
+      this.statusMessage = '';
+    } catch (error) {
+      this.statusMessage = this.errorMessage(error);
+    } finally {
+      bytes?.fill(0);
+      this.isBackupBusy = false;
+      this.busyMessage = '';
+    }
+  }
+
+  private async restoreStratumFile(passwordValue: string): Promise<void> {
+    if (this.isBackupBusy || this.isIconPackBusy) {
+      return;
+    }
+    this.isBackupBusy = true;
+    this.busyMessage = '正在读取 Stratum 备份…';
+    let bytes: Uint8Array | null = null;
+    try {
+      if (this.pendingBackupUri.length === 0) {
+        throw new Error('Choose a Stratum backup file first.');
+      }
+      bytes = this.readFile(this.pendingBackupUri, 16 * 1024 * 1024, 'Stratum backup');
       this.pendingRestoreVault = await decryptAuthPro(bytes, passwordValue);
       this.showRestoreDialog = true;
       this.statusMessage = '';
@@ -697,23 +767,23 @@ struct Index {
       return;
     }
     this.isBackupBusy = true;
-    this.busyMessage = '正在生成加密备份…';
+    this.busyMessage = '正在生成 FUN 加密备份…';
     let bytes: Uint8Array | null = null;
     try {
       if (this.context === null) {
         throw new Error('Unable to access the application context.');
       }
-      bytes = await encryptAuthPro(this.vault, passwordValue);
+      bytes = await encryptFunBackup(this.vault, passwordValue);
       const documentPicker = new picker.DocumentViewPicker(this.context);
       const uris = await documentPicker.save({
-        newFileNames: ['harmony-authenticator-emulator.authpro'],
-        fileSuffixChoices: ['Encrypted authenticator backup|.authpro']
+        newFileNames: ['fun-authenticator-backup.funbackup'],
+        fileSuffixChoices: ['FUN Authenticator encrypted backup|.funbackup']
       });
       if (uris.length === 0) {
         return;
       }
       this.writeFile(uris[0], bytes);
-      this.showSuccessToast('加密备份已保存。');
+      this.showSuccessToast('FUN 加密备份已保存。');
     } catch (error) {
       this.statusMessage = this.errorMessage(error);
     } finally {
@@ -830,6 +900,20 @@ struct Index {
         throw new Error('This icon-pack source is not a valid web address.');
       }
       await this.context.startAbility({ action: 'ohos.want.action.viewData', uri: url });
+    } catch (error) {
+      this.statusMessage = this.errorMessage(error);
+    }
+  }
+
+  private async openPrivacyPolicy(): Promise<void> {
+    try {
+      if (this.context === null) {
+        throw new Error('Unable to access the application context.');
+      }
+      await this.context.startAbility({
+        action: 'ohos.want.action.viewData',
+        uri: 'https://agreement-drcn.hispace.dbankcloud.cn/index.html?lang=zh&agreementId=2092872494661817600'
+      });
     } catch (error) {
       this.statusMessage = this.errorMessage(error);
     }
@@ -1106,6 +1190,39 @@ struct Index {
     }
   }
 
+  private async createCategoryForAssignment(item: AuthenticatorRecord): Promise<void> {
+    const name = this.assignmentCategoryName.trim();
+    if (name.length === 0) {
+      this.statusMessage = '请输入分类名称。';
+      return;
+    }
+    if (this.vault.categories.some((category) => category.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      this.statusMessage = '该分类已存在。';
+      return;
+    }
+    const category: AuthenticatorCategory = {
+      id: categoryIdForName(name),
+      name,
+      ranking: this.vault.categories.length
+    };
+    const categories = this.vault.categories.concat([category]);
+    const authenticators = this.vault.authenticators.map((current: AuthenticatorRecord) => {
+      const copy = copyAuthenticator(current);
+      if (copy.id === item.id) {
+        copy.categoryId = category.id;
+      }
+      return copy;
+    });
+    try {
+      await this.saveVault(copyVault(this.vault, authenticators, categories));
+      this.assignmentCategoryName = '';
+      this.categoryAssignmentId = '';
+      this.showSuccessToast('分类已添加并指定。');
+    } catch (error) {
+      this.statusMessage = this.errorMessage(error);
+    }
+  }
+
   private sortOptions(): Array<SortOption> {
     return [
       { mode: 'az', label: '字母顺序（A 至 Z）' },
@@ -1192,6 +1309,20 @@ struct Index {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         Button() {
+          Image($rawfile('search.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+        }
+          .width(40)
+          .height(40)
+          .backgroundColor('transparent')
+          .onClick(() => {
+            this.searchVisible = true;
+            this.searchText = '';
+          });
+        Button() {
           Image($rawfile('filter.svg'))
             .width(24)
             .height(24)
@@ -1206,7 +1337,8 @@ struct Index {
     }
     .width('100%')
     .height(56)
-    .padding({ left: 16, right: 8 });
+    .padding({ left: 16, right: 8 })
+    .backgroundColor(this.surfaceColor());
   }
 
   private closeSearch(): void {
@@ -1289,8 +1421,9 @@ struct Index {
     .alignItems(HorizontalAlign.Start)
     .justifyContent(FlexAlign.Start)
     .backgroundColor(this.surfaceColor())
-    .borderRadius(12)
-    .border({ width: 0.5, color: this.darkMode ? '#373B40' : '#E1E6EC', radius: 12 })
+    .borderRadius(8)
+    .border({ width: 0.5, color: this.darkMode ? '#353A40' : '#D9DDE2', radius: 8 })
+    .clip(true)
     .onClick(() => {
       if (this.tapToCopy) {
         this.copyCode(item);
@@ -1357,8 +1490,9 @@ struct Index {
     .justifyContent(FlexAlign.Start)
     .padding({ left: 16, right: 8, top: 8, bottom: 8 })
     .backgroundColor(this.surfaceColor())
-    .borderRadius(12)
-    .border({ width: 0.5, color: this.darkMode ? '#373B40' : '#E1E6EC', radius: 12 })
+    .borderRadius(8)
+    .border({ width: 0.5, color: this.darkMode ? '#353A40' : '#D9DDE2', radius: 8 })
+    .clip(true)
     .onClick(() => {
       if (this.tapToCopy) {
         this.copyCode(item);
@@ -1440,8 +1574,9 @@ struct Index {
     .alignItems(HorizontalAlign.Start)
     .justifyContent(FlexAlign.Start)
     .backgroundColor(this.surfaceColor())
-    .borderRadius(12)
-    .border({ width: 0.5, color: this.darkMode ? '#373B40' : '#E1E6EC', radius: 12 })
+    .borderRadius(8)
+    .border({ width: 0.5, color: this.darkMode ? '#353A40' : '#D9DDE2', radius: 8 })
+    .clip(true)
     .onClick(() => {
       if (this.tapToCopy) {
         this.copyCode(item);
@@ -1495,20 +1630,20 @@ struct Index {
               .fontSize(14)
               .fontColor(this.primaryColor())
               .backgroundColor('transparent')
-              .onClick(() => this.showSuccessToast('验证码仅保存在本机；可使用底部“+”添加账号。'));
+                .onClick(() => this.openGuide());
             Button('从其他应用导入')
               .height(44)
               .fontSize(14)
               .fontColor(this.primaryColor())
               .backgroundColor('transparent')
-              .border({ width: 1, color: this.primaryColor(), radius: 22 })
+              .border({ width: 1, color: this.primaryColor(), radius: 8 })
               .onClick(() => this.showImportMenu = true);
             Button('从备份中恢复')
               .height(44)
               .fontSize(14)
               .fontColor(this.primaryColor())
               .backgroundColor('transparent')
-              .border({ width: 1, color: this.primaryColor(), radius: 22 })
+              .border({ width: 1, color: this.primaryColor(), radius: 8 })
               .onClick(() => this.chooseBackupFile());
           }
         }
@@ -1558,48 +1693,53 @@ struct Index {
 
   @Builder
   private bottomBar() {
-    Row({ space: 6 }) {
+    Row() {
       Button() {
-        Image($rawfile('menu.svg'))
-          .width(24)
-          .height(24)
-          .fillColor(this.primaryTextColor())
-          .supportSvg2(true);
+        Column() {
+          Image($rawfile('filter.svg'))
+            .width(26)
+            .height(26)
+            .fillColor(this.selectedCategoryId.length === 0 ? this.primaryColor() : this.primaryTextColor())
+            .supportSvg2(true);
+        }
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center);
       }
-        .width(44)
-        .height(48)
+        .layoutWeight(1)
+        .height(64)
+        .padding(0)
         .backgroundColor('transparent')
-        .onClick(() => this.showMainMenu = true);
-      Button() {
-        Image($rawfile('search.svg'))
-          .width(24)
-          .height(24)
-          .fillColor(this.primaryTextColor())
-          .supportSvg2(true);
-      }
-        .width(44)
-        .height(48)
-        .backgroundColor('transparent')
-        .onClick(() => {
-          this.searchVisible = !this.searchVisible;
-          if (!this.searchVisible) {
-            this.searchText = '';
-          }
-        });
-      Blank();
+        .onClick(() => this.showCategoryMenu = true);
       Button('+')
         .width(56)
         .height(56)
-        .fontSize(32)
-        .backgroundColor(this.primaryContainerColor())
-        .fontColor(this.onPrimaryContainerColor())
-        .borderRadius(18)
-        .onClick(() => this.showAddMenu = true);
+        .fontSize(36)
+        .backgroundColor(this.primaryColor())
+        .fontColor('#FFFFFF')
+        .borderRadius(16)
+        .onClick(() => this.showAddMenu = true)
+        .layoutWeight(1);
+      Button() {
+        Column() {
+          Image($rawfile('menu.svg'))
+            .width(26)
+            .height(26)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+        }
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center);
+      }
+        .layoutWeight(1)
+        .height(64)
+        .padding(0)
+        .backgroundColor('transparent')
+        .onClick(() => this.showMainMenu = true);
     }
     .width('100%')
-    .height(56)
-    .padding({ left: 6, right: 16, top: 4, bottom: 8 })
-    .backgroundColor(this.darkMode ? '#1D2024' : '#E9EFF7');
+    .height(84)
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+    .backgroundColor(this.surfaceColor());
   }
 
   @Builder
@@ -1616,129 +1756,157 @@ struct Index {
   private mainMenuSheet() {
     Column() {
       Blank().layoutWeight(1).onClick(() => this.showMainMenu = false);
-      Column({ space: 8 }) {
+      Column({ space: 4 }) {
         this.sheetHandle();
-        Text('主菜单')
+        Text('菜单')
           .width('100%')
-          .fontSize(24)
+          .fontSize(20)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.primaryTextColor())
           .textAlign(TextAlign.Center)
           .margin({ bottom: 8 });
-        Text('分类')
+        Row({ space: 20 }) {
+          Text('▣').fontSize(24).fontColor(this.primaryTextColor());
+          Text('备份').fontSize(18).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(52)
+        .onClick(() => {
+          this.showMainMenu = false;
+          this.showSettings = true;
+          this.settingsPage = 'backup';
+        });
+        Row({ space: 20 }) {
+          Text('◈').fontSize(24).fontColor(this.primaryTextColor());
+          Text('分类').fontSize(18).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(52)
+        .onClick(() => {
+          this.showMainMenu = false;
+          this.showSettings = true;
+          this.settingsPage = 'categories';
+        });
+        Row({ space: 20 }) {
+          Text('▦').fontSize(24).fontColor(this.primaryTextColor());
+          Text('图标包').fontSize(18).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(52)
+        .onClick(() => {
+          this.showMainMenu = false;
+          this.showSettings = true;
+          this.settingsPage = 'icons';
+        });
+        Row({ space: 20 }) {
+          Text('⚙').fontSize(24).fontColor(this.primaryTextColor());
+          Text('设置').fontSize(18).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(52)
+        .onClick(() => {
+          this.showMainMenu = false;
+          this.showSettings = true;
+          this.settingsPage = 'main';
+        });
+        Row({ space: 20 }) {
+          Image($rawfile('guide.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+          Text('入门指南').fontSize(18).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(52)
+        .onClick(() => {
+          this.showMainMenu = false;
+          this.openGuide();
+        });
+      }
+      .width('100%')
+      .height('56%')
+      .padding({ left: 20, right: 20, bottom: 12 })
+      .backgroundColor(this.pageColor())
+      .borderRadius({ topLeft: 16, topRight: 16 });
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#66000000');
+  }
+
+  @Builder
+  private categoryMenuSheet() {
+    Column() {
+      Blank().layoutWeight(1).onClick(() => this.showCategoryMenu = false);
+      Column() {
+        this.sheetHandle();
+        Text('选择分类')
           .width('100%')
-          .fontSize(16)
-          .fontColor(this.secondaryTextColor())
-          .margin({ bottom: 4 });
+          .fontSize(20)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+          .textAlign(TextAlign.Center)
+          .margin({ bottom: 8 });
         Scroll() {
           Column({ space: 4 }) {
             Row() {
               Text('全部')
                 .fontSize(16)
-                .fontColor(this.selectedCategoryId.length === 0 ? this.onPrimaryContainerColor() : this.primaryTextColor());
+                .fontColor(this.selectedCategoryId.length === 0 ? this.primaryColor() : this.primaryTextColor())
+                .layoutWeight(1);
+              if (this.selectedCategoryId.length === 0) {
+                Text('✓').fontSize(18).fontColor(this.primaryColor());
+              }
             }
-              .width('100%')
-              .height(48)
-              .padding({ left: 16 })
-              .backgroundColor(this.selectedCategoryId.length === 0 ? this.primaryContainerColor() : 'transparent')
-              .borderRadius(24)
-              .onClick(() => {
-                this.selectedCategoryId = '';
-                this.showMainMenu = false;
-              });
+            .width('100%')
+            .height(48)
+            .padding({ left: 12, right: 12 })
+            .backgroundColor(this.selectedCategoryId.length === 0 ? this.accentSoftColor() : 'transparent')
+            .borderRadius(8)
+            .onClick(() => {
+              this.selectedCategoryId = '';
+              this.showCategoryMenu = false;
+            });
             ForEach(this.vault.categories, (category: AuthenticatorCategory) => {
               Row() {
                 Text(category.name)
                   .fontSize(16)
-                  .fontColor(this.selectedCategoryId === category.id ? this.onPrimaryContainerColor() : this.primaryTextColor());
+                  .fontColor(this.selectedCategoryId === category.id ? this.primaryColor() : this.primaryTextColor())
+                  .layoutWeight(1);
+                if (this.selectedCategoryId === category.id) {
+                  Text('✓').fontSize(18).fontColor(this.primaryColor());
+                }
               }
-                .width('100%')
-                .height(48)
-                .padding({ left: 16 })
-                .backgroundColor(this.selectedCategoryId === category.id ? this.primaryContainerColor() : 'transparent')
-                .borderRadius(24)
-                .onClick(() => {
-                  this.selectedCategoryId = category.id;
-                  this.showMainMenu = false;
-                });
+              .width('100%')
+              .height(48)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor(this.selectedCategoryId === category.id ? this.accentSoftColor() : 'transparent')
+              .borderRadius(8)
+              .onClick(() => {
+                this.selectedCategoryId = category.id;
+                this.showCategoryMenu = false;
+              });
             }, (category: AuthenticatorCategory) => category.id);
           }
-        }
-        .width('100%')
-        .height(144)
-        .scrollBar(BarState.Off);
-        Row().width('100%').height(1).backgroundColor(this.darkMode ? '#3A4046' : '#DDE3EA');
-        Scroll() {
-          Column() {
-            Text('更多')
-              .width('100%')
-              .fontSize(16)
-              .fontColor(this.secondaryTextColor())
-              .margin({ top: 4, bottom: 2 });
-            Row({ space: 20 }) {
-              Text('▣').fontSize(24).fontColor(this.primaryTextColor());
-              Text('备份').fontSize(18).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showMainMenu = false;
-              this.showSettings = true;
-              this.settingsPage = 'backup';
-            });
-            Row({ space: 20 }) {
-              Text('◈').fontSize(24).fontColor(this.primaryTextColor());
-              Text('分类').fontSize(18).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showMainMenu = false;
-              this.showSettings = true;
-              this.settingsPage = 'categories';
-            });
-            Row({ space: 20 }) {
-              Text('▦').fontSize(24).fontColor(this.primaryTextColor());
-              Text('图标包').fontSize(18).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showMainMenu = false;
-              this.showSettings = true;
-              this.settingsPage = 'icons';
-            });
-            Row({ space: 20 }) {
-              Text('⚙').fontSize(24).fontColor(this.primaryTextColor());
-              Text('设置').fontSize(18).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showMainMenu = false;
-              this.showSettings = true;
-              this.settingsPage = 'main';
-            });
-            Row({ space: 20 }) {
-              Text('ⓘ').fontSize(24).fontColor(this.primaryTextColor());
-              Text('关于').fontSize(18).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showMainMenu = false;
-              this.showSuccessToast('Stratum Authenticator HarmonyOS 移植版');
-            });
-          }
+          .width('100%')
+          .justifyContent(FlexAlign.Start)
+          .alignItems(HorizontalAlign.Start)
         }
         .layoutWeight(1)
-        .scrollBar(BarState.Auto);
+        .width('100%')
+        .scrollBar(BarState.Auto)
+        .scrollable(ScrollDirection.Vertical)
+        .initialOffset({ xOffset: 0, yOffset: 0 })
+        .align(Alignment.TopStart);
       }
       .width('100%')
-      .height('72%')
+      .height('56%')
+      .justifyContent(FlexAlign.Start)
+      .alignItems(HorizontalAlign.Start)
       .padding({ left: 20, right: 20, bottom: 12 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -1759,7 +1927,11 @@ struct Index {
           .textAlign(TextAlign.Center)
           .margin({ bottom: 12 });
         Row({ space: 20 }) {
-          Text('▦').fontSize(24).fontColor(this.primaryTextColor());
+          Image($rawfile('qr-code.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
           Text('扫描二维码').fontSize(18).fontColor(this.primaryTextColor());
         }
         .width('100%')
@@ -1769,8 +1941,12 @@ struct Index {
           this.scanOtpUri();
         });
         Row({ space: 20 }) {
-          Text('⚿').fontSize(24).fontColor(this.primaryTextColor());
-          Text('输入提供的密钥').fontSize(18).fontColor(this.primaryTextColor());
+          Image($rawfile('key.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+          Text('输入密钥').fontSize(18).fontColor(this.primaryTextColor());
         }
         .width('100%')
         .height(56)
@@ -1779,8 +1955,26 @@ struct Index {
           this.openNewEditor();
         });
         Row({ space: 20 }) {
-          Text('◴').fontSize(24).fontColor(this.primaryTextColor());
-          Text('从备份中恢复').fontSize(18).fontColor(this.primaryTextColor());
+          Image($rawfile('uri.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+          Text('输入 URI').fontSize(18).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(56)
+        .onClick(() => {
+          this.showAddMenu = false;
+          this.openUriEditor();
+        });
+        Row({ space: 20 }) {
+          Image($rawfile('restore.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+          Text('恢复备份').fontSize(18).fontColor(this.primaryTextColor());
         }
         .width('100%')
         .height(56)
@@ -1789,7 +1983,11 @@ struct Index {
           this.chooseBackupFile();
         });
         Row({ space: 20 }) {
-          Text('⇥').fontSize(24).fontColor(this.primaryTextColor());
+          Image($rawfile('apps.svg'))
+            .width(24)
+            .height(24)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
           Text('从其他应用导入').fontSize(18).fontColor(this.primaryTextColor());
         }
         .width('100%')
@@ -1802,7 +2000,7 @@ struct Index {
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 16 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -1822,103 +2020,38 @@ struct Index {
           .fontColor(this.primaryTextColor())
           .textAlign(TextAlign.Center)
           .margin({ bottom: 12 });
-        Scroll() {
-          Column({ space: 2 }) {
-            Row({ space: 16 }) {
-              Text('▦').fontSize(22).fontColor(this.primaryTextColor());
-              Text('Google Authenticator 迁移二维码').fontSize(16).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showImportMenu = false;
-              this.scanOtpUri();
-            });
-            ForEach(EXTERNAL_IMPORT_OPTIONS, (option: ExternalImportOption) => {
-              Row({ space: 16 }) {
-                Text('⇥').fontSize(22).fontColor(this.primaryTextColor());
-                Text(option.label)
-                  .fontSize(16)
-                  .fontColor(this.primaryTextColor())
-                  .layoutWeight(1);
-                if (option.passwordPolicy === 'always') {
-                  Text('密码')
-                    .fontSize(12)
-                    .fontColor(this.secondaryTextColor());
-                }
-              }
-              .width('100%')
-              .height(52)
-              .onClick(() => {
-                this.showImportMenu = false;
-                this.chooseExternalImport(option.format);
-              });
-            }, (option: ExternalImportOption) => option.format);
-            Text('需要网页指南的应用')
-              .width('100%')
-              .fontSize(14)
-              .fontColor(this.secondaryTextColor())
-              .padding({ top: 8, bottom: 4 });
-            Row({ space: 16 }) {
-              Text('ⓘ').fontSize(22).fontColor(this.primaryTextColor());
-              Text('Google Authenticator 指南').fontSize(16).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showImportMenu = false;
-              this.openIconPackWebsite('https://stratumauth.com/wiki/import-from-google-authenticator');
-            });
-            Row({ space: 16 }) {
-              Text('ⓘ').fontSize(22).fontColor(this.primaryTextColor());
-              Text('Authy 指南').fontSize(16).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showImportMenu = false;
-              this.openIconPackWebsite('https://stratumauth.com/wiki/import-from-authy');
-            });
-            Row({ space: 16 }) {
-              Text('ⓘ').fontSize(22).fontColor(this.primaryTextColor());
-              Text('Steam 指南').fontSize(16).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showImportMenu = false;
-              this.openIconPackWebsite('https://stratumauth.com/wiki/import-from-steam');
-            });
-            Row({ space: 16 }) {
-              Text('ⓘ').fontSize(22).fontColor(this.primaryTextColor());
-              Text('Blizzard Authenticator 指南').fontSize(16).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showImportMenu = false;
-              this.openIconPackWebsite('https://stratumauth.com/wiki/import-from-blizzard-authenticator');
-            });
-            Row({ space: 16 }) {
-              Text('▤').fontSize(22).fontColor(this.primaryTextColor());
-              Text('Stratum / .authpro 备份文件').fontSize(16).fontColor(this.primaryTextColor());
-            }
-            .width('100%')
-            .height(52)
-            .onClick(() => {
-              this.showImportMenu = false;
-              this.chooseBackupFile();
-            });
-          }
+        Row({ space: 16 }) {
+          Image($rawfile('stratum-logo.png')).width(32).height(32);
+          Text('导入 Stratum 文件').fontSize(16).fontColor(this.primaryTextColor());
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Auto);
+        .width('100%')
+        .height(56)
+        .padding({ left: 4, right: 4 })
+        .onClick(() => {
+          this.showImportMenu = false;
+          this.chooseStratumFile();
+        });
+        Row({ space: 16 }) {
+          Image($rawfile('uri-list.svg'))
+            .width(28)
+            .height(28)
+            .fillColor(this.primaryTextColor())
+            .supportSvg2(true);
+          Text('导入 URI list 文本').fontSize(16).fontColor(this.primaryTextColor());
+        }
+        .width('100%')
+        .height(56)
+        .padding({ left: 4, right: 4 })
+        .onClick(() => {
+          this.showImportMenu = false;
+          this.chooseExternalImport('uri-list');
+        });
       }
       .width('100%')
-      .height('88%')
+      .height('40%')
       .padding({ left: 20, right: 20, bottom: 16 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -2024,6 +2157,7 @@ struct Index {
             .width('100%')
             .height(56)
             .onClick(() => {
+              this.assignmentCategoryName = '';
               this.categoryAssignmentId = item.id;
               this.accountMenuId = '';
             });
@@ -2065,7 +2199,7 @@ struct Index {
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 16 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -2112,7 +2246,7 @@ struct Index {
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 16 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -2134,38 +2268,71 @@ struct Index {
           .margin({ bottom: 12 });
         ForEach(this.vault.authenticators.filter((item: AuthenticatorRecord) => item.id === this.categoryAssignmentId),
           (item: AuthenticatorRecord) => {
-            Row() {
-              Text('未分类')
-                .fontSize(18)
-                .fontColor(this.primaryTextColor())
-                .layoutWeight(1);
-              if (item.categoryId.length === 0) {
-                Text('✓').fontSize(20).fontColor(this.primaryColor());
-              }
+            Row({ space: 8 }) {
+              TextInput({ placeholder: '新分类名称', text: this.assignmentCategoryName })
+                .layoutWeight(1)
+                .height(48)
+                .fontSize(16)
+                .backgroundColor('transparent')
+                .border({ width: 1, color: this.darkMode ? '#737A82' : '#71787E', radius: 8 })
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => this.assignmentCategoryName = value);
+              Button('添加')
+                .height(48)
+                .fontSize(14)
+                .backgroundColor(this.primaryColor())
+                .fontColor('#FFFFFF')
+                .borderRadius(8)
+                .onClick(() => this.createCategoryForAssignment(item));
             }
             .width('100%')
-            .height(52)
-            .onClick(() => this.assignCategory(item, ''));
-            ForEach(this.vault.categories, (category: AuthenticatorCategory) => {
-              Row() {
-                Text(category.name)
-                  .fontSize(18)
-                  .fontColor(this.primaryTextColor())
-                  .layoutWeight(1);
-                if (item.categoryId === category.id) {
-                  Text('✓').fontSize(20).fontColor(this.primaryColor());
+            .margin({ bottom: 8 });
+            Scroll() {
+              Column() {
+                Row() {
+                  Text('未分类')
+                    .fontSize(18)
+                    .fontColor(this.primaryTextColor())
+                    .layoutWeight(1);
+                  if (item.categoryId.length === 0) {
+                    Text('✓').fontSize(20).fontColor(this.primaryColor());
+                  }
                 }
+                .width('100%')
+                .height(52)
+                .onClick(() => this.assignCategory(item, ''));
+                ForEach(this.vault.categories, (category: AuthenticatorCategory) => {
+                  Row() {
+                    Text(category.name)
+                      .fontSize(18)
+                      .fontColor(this.primaryTextColor())
+                      .layoutWeight(1);
+                    if (item.categoryId === category.id) {
+                      Text('✓').fontSize(20).fontColor(this.primaryColor());
+                    }
+                  }
+                  .width('100%')
+                  .height(52)
+                  .onClick(() => this.assignCategory(item, category.id));
+                }, (category: AuthenticatorCategory) => category.id);
               }
               .width('100%')
-              .height(52)
-              .onClick(() => this.assignCategory(item, category.id));
-            }, (category: AuthenticatorCategory) => category.id);
+              .alignItems(HorizontalAlign.Start)
+              .justifyContent(FlexAlign.Start);
+            }
+            .layoutWeight(1)
+            .width('100%')
+            .scrollBar(BarState.Auto)
+            .scrollable(ScrollDirection.Vertical)
+            .initialOffset({ xOffset: 0, yOffset: 0 })
+            .align(Alignment.TopStart);
           }, (item: AuthenticatorRecord) => item.id);
       }
       .width('100%')
+      .height('62%')
       .padding({ left: 20, right: 20, bottom: 16 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -2176,7 +2343,7 @@ struct Index {
   private settingsContent() {
     Column() {
       Row({ space: 16 }) {
-        Button('←')
+        Button('<')
           .width(48)
           .height(48)
           .fontSize(28)
@@ -2334,7 +2501,7 @@ struct Index {
             Text('备份与恢复')
               .fontSize(16)
               .fontColor(this.primaryTextColor());
-            Text('导入或导出 Authenticator Pro 兼容备份')
+            Text('导入或导出 FUN 加密备份')
               .fontSize(14)
               .fontColor(this.secondaryTextColor());
           }
@@ -2367,6 +2534,29 @@ struct Index {
         }
         .width('100%')
         .padding({ left: 20, right: 20, top: 16, bottom: 16 });
+        Text('关于')
+          .width('100%')
+          .fontSize(16)
+          .fontColor(this.secondaryTextColor())
+          .padding({ left: 16, top: 12, bottom: 8 });
+        Row() {
+          Column({ space: 4 }) {
+            Text('隐私协议')
+              .fontSize(16)
+              .fontColor(this.primaryTextColor());
+            Text('查看应用隐私政策')
+              .fontSize(14)
+              .fontColor(this.secondaryTextColor());
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1);
+          Text('›')
+            .fontSize(24)
+            .fontColor(this.secondaryTextColor());
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20, top: 16, bottom: 16 })
+        .onClick(() => this.openPrivacyPolicy());
         Text('验证码仅保存在本机应用沙箱中，无需网络生成。')
           .fontSize(12)
           .fontColor(this.secondaryTextColor())
@@ -2402,9 +2592,9 @@ struct Index {
             .width(48)
             .height(48)
             .fontSize(24)
-            .backgroundColor(this.primaryContainerColor())
-            .fontColor(this.onPrimaryContainerColor())
-            .borderRadius(16)
+            .backgroundColor(this.accentSoftColor())
+            .fontColor(this.onAccentSoftColor())
+            .borderRadius(8)
             .onClick(() => this.createCategory());
         }
         ForEach(this.vault.categories, (category: AuthenticatorCategory) => {
@@ -2427,7 +2617,7 @@ struct Index {
           .width('100%')
           .padding({ left: 16, right: 8, top: 8, bottom: 8 })
           .backgroundColor(this.surfaceColor())
-          .borderRadius(12);
+          .borderRadius(8);
         }, (category: AuthenticatorCategory) => category.id);
         if (this.vault.categories.length === 0) {
           Text('尚未创建分类。')
@@ -2440,32 +2630,45 @@ struct Index {
             .fontColor(this.darkMode ? '#FFB4AB' : '#BA1A1A');
         }
       }
+      .width('100%')
+      .justifyContent(FlexAlign.Start)
+      .alignItems(HorizontalAlign.Start)
       .padding({ left: 20, right: 20, top: 16, bottom: 20 });
     }
     .layoutWeight(1)
-    .scrollBar(BarState.Auto);
+    .scrollBar(BarState.Auto)
+    .scrollable(ScrollDirection.Vertical)
+    .initialOffset({ xOffset: 0, yOffset: 0 })
+    .align(Alignment.TopStart);
   }
 
   @Builder
   private backupSettingsContent() {
     Scroll() {
       Column({ space: 14 }) {
-        Text('支持导入 Stratum .stratum 备份与 Authenticator Pro 加密备份。')
+        Text('FUN 备份采用 Argon2id 与 AES-GCM 加密；恢复时合并账号，不会覆盖其他记录。')
           .fontSize(14)
           .fontColor(this.secondaryTextColor());
-        Button('导入 .stratum / .authpro 备份')
+        Button('恢复 FUN 备份')
           .width('100%')
           .height(48)
           .backgroundColor('transparent')
           .fontColor(this.primaryColor())
-          .border({ width: 1, color: this.primaryColor(), radius: 24 })
+          .border({ width: 1, color: this.primaryColor(), radius: 8 })
           .onClick(() => this.chooseBackupFile());
-        Button('导出加密备份')
+        Button('导入 Stratum 文件')
+          .width('100%')
+          .height(48)
+          .backgroundColor('transparent')
+          .fontColor(this.primaryColor())
+          .border({ width: 1, color: this.primaryColor(), radius: 8 })
+          .onClick(() => this.chooseStratumFile());
+        Button('导出 FUN 加密备份')
           .width('100%')
           .height(48)
           .backgroundColor(this.primaryColor())
           .fontColor('#FFFFFF')
-          .borderRadius(24)
+          .borderRadius(8)
           .onClick(() => this.openExportPasswordDialog());
         if (this.statusMessage.length > 0) {
           Text(this.statusMessage)
@@ -2492,7 +2695,7 @@ struct Index {
           .height(48)
           .backgroundColor(this.primaryColor())
           .fontColor('#FFFFFF')
-          .borderRadius(24)
+          .borderRadius(8)
           .onClick(() => this.importIconPack());
         Button('浏览可下载的图标包')
           .width('100%')
@@ -2545,7 +2748,7 @@ struct Index {
           .width('100%')
           .padding(16)
           .backgroundColor(this.surfaceColor())
-          .borderRadius(12);
+          .borderRadius(8);
         }, (pack: IconPack) => pack.name);
         if (this.statusMessage.length > 0) {
           Text(this.statusMessage)
@@ -2601,7 +2804,7 @@ struct Index {
       .width('100%')
       .padding({ left: 20, right: 20, top: 20, bottom: 20 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -2636,7 +2839,7 @@ struct Index {
       .width('100%')
       .padding(22)
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 22, topRight: 22 });
+      .borderRadius({ topLeft: 12, topRight: 12 });
     }
     .width('100%')
     .height('100%')
@@ -2677,17 +2880,17 @@ struct Index {
             Button('默认')
               .fontSize(14)
               .backgroundColor(this.selectedIconPackName.length === 0
-                ? this.primaryContainerColor() : this.surfaceColor())
+                ? this.accentSoftColor() : this.surfaceColor())
               .fontColor(this.selectedIconPackName.length === 0
-                ? this.onPrimaryContainerColor() : this.primaryTextColor())
+                ? this.onAccentSoftColor() : this.primaryTextColor())
               .onClick(() => this.selectedIconPackName = '');
             ForEach(this.iconPacks, (pack: IconPack) => {
               Button(pack.name)
                 .fontSize(14)
                 .backgroundColor(this.selectedIconPackName === pack.name
-                  ? this.primaryContainerColor() : this.surfaceColor())
+                  ? this.accentSoftColor() : this.surfaceColor())
                 .fontColor(this.selectedIconPackName === pack.name
-                  ? this.onPrimaryContainerColor() : this.primaryTextColor())
+                  ? this.onAccentSoftColor() : this.primaryTextColor())
                 .onClick(() => this.selectedIconPackName = pack.name);
             }, (pack: IconPack) => pack.name);
           }
@@ -2780,7 +2983,7 @@ struct Index {
       .height('76%')
       .padding({ left: 20, right: 20, bottom: 16 })
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 28, topRight: 28 });
+      .borderRadius({ topLeft: 16, topRight: 16 });
     }
     .width('100%')
     .height('100%')
@@ -2815,11 +3018,119 @@ struct Index {
       .width('100%')
       .padding(22)
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 22, topRight: 22 });
+      .borderRadius({ topLeft: 12, topRight: 12 });
     }
     .width('100%')
     .height('100%')
     .backgroundColor('#99000000');
+  }
+
+  @Builder
+  private guideSheet() {
+    Column() {
+      Blank().layoutWeight(1).onClick(() => this.showGuide = false);
+      Column() {
+        this.sheetHandle();
+        Text('入门指南')
+          .width('100%')
+          .fontSize(22)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+          .textAlign(TextAlign.Center)
+          .margin({ bottom: 12 });
+        Scroll() {
+          Column({ space: 16 }) {
+            Row({ space: 12 }) {
+              Image($rawfile('add-account.svg'))
+                .width(28)
+                .height(28)
+                .fillColor(this.primaryTextColor())
+                .supportSvg2(true);
+              Column({ space: 4 }) {
+                Text('1. 选择添加方式')
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.primaryTextColor());
+                Text('点击底部“+”，可扫描二维码、手动输入密钥或粘贴 otpauth:// URI。')
+                  .fontSize(14)
+                  .fontColor(this.secondaryTextColor());
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1);
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Top);
+            Row({ space: 12 }) {
+              Image($rawfile('apps.svg'))
+                .width(28)
+                .height(28)
+                .fillColor(this.primaryTextColor())
+                .supportSvg2(true);
+              Column({ space: 4 }) {
+                Text('2. 导入已有账号')
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.primaryTextColor());
+                Text('从“从其他应用导入”选择 Stratum 备份文件或 URI list 文本；也可选择恢复 FUN 加密备份。备份恢复会合并账号。')
+                  .fontSize(14)
+                  .fontColor(this.secondaryTextColor());
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1);
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Top);
+            Row({ space: 12 }) {
+              Image($rawfile('check.svg'))
+                .width(28)
+                .height(28)
+                .fillColor(this.primaryTextColor())
+                .supportSvg2(true);
+              Column({ space: 4 }) {
+                Text('3. 检查并保存')
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.primaryTextColor());
+                Text('确认发行方、用户名和密钥正确后点击“添加”。如需整理账号，可在账号菜单的“指定分类”中新建分类并直接分配。')
+                  .fontSize(14)
+                  .fontColor(this.secondaryTextColor());
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1);
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Top);
+            Text('验证码在本机生成。请妥善保管密钥和备份密码。')
+              .width('100%')
+              .fontSize(13)
+              .fontColor(this.secondaryTextColor());
+          }
+          .width('100%')
+          .padding({ left: 20, right: 20, bottom: 16 });
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .scrollBar(BarState.Auto);
+        Button('开始添加')
+          .width('100%')
+          .height(48)
+          .backgroundColor(this.primaryColor())
+          .fontColor('#FFFFFF')
+          .borderRadius(8)
+          .margin({ bottom: 20 })
+          .onClick(() => {
+            this.showGuide = false;
+            this.showAddMenu = true;
+          });
+      }
+      .width('100%')
+      .height('70%')
+      .backgroundColor(this.pageColor())
+      .borderRadius({ topLeft: 16, topRight: 16 });
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#66000000');
   }
 
   @Builder
@@ -2849,8 +3160,8 @@ struct Index {
                 ForEach(TYPES, (type: AuthenticatorType) => {
                   Button(this.typeLabel(type))
                     .fontSize(13)
-                    .backgroundColor(this.editor.type === type ? this.primaryContainerColor() : this.surfaceColor())
-                    .fontColor(this.editor.type === type ? this.onPrimaryContainerColor() : this.primaryTextColor())
+                    .backgroundColor(this.editor.type === type ? this.accentSoftColor() : this.surfaceColor())
+                    .fontColor(this.editor.type === type ? this.onAccentSoftColor() : this.primaryTextColor())
                     .onClick(() => {
                       const digits = type === this.editor.type ? this.editor.digits :
                         type === 'TOTP' || type === 'HOTP' ? 6 : type === 'Steam' ? 5 : type === 'Yandex' ? 8 : 6;
@@ -2922,8 +3233,8 @@ struct Index {
                 ForEach(ALGORITHMS, (algorithm: OtpAlgorithm) => {
                   Button(algorithm)
                     .fontSize(13)
-                    .backgroundColor(this.editor.algorithm === algorithm ? this.primaryContainerColor() : this.surfaceColor())
-                    .fontColor(this.editor.algorithm === algorithm ? this.onPrimaryContainerColor() : this.primaryTextColor())
+                    .backgroundColor(this.editor.algorithm === algorithm ? this.accentSoftColor() : this.surfaceColor())
+                    .fontColor(this.editor.algorithm === algorithm ? this.onAccentSoftColor() : this.primaryTextColor())
                     .onClick(() => this.setEditor({ algorithm }));
                 }, (algorithm: OtpAlgorithm) => algorithm);
               }
@@ -2969,13 +3280,13 @@ struct Index {
             Scroll() {
               Row({ space: 8 }) {
                 Button('未分类')
-                  .backgroundColor(this.editor.categoryId.length === 0 ? this.primaryContainerColor() : this.surfaceColor())
-                  .fontColor(this.editor.categoryId.length === 0 ? this.onPrimaryContainerColor() : this.primaryTextColor())
+                  .backgroundColor(this.editor.categoryId.length === 0 ? this.accentSoftColor() : this.surfaceColor())
+                  .fontColor(this.editor.categoryId.length === 0 ? this.onAccentSoftColor() : this.primaryTextColor())
                   .onClick(() => this.setEditor({ categoryId: '' }));
                 ForEach(this.vault.categories, (category: AuthenticatorCategory) => {
                   Button(category.name)
-                    .backgroundColor(this.editor.categoryId === category.id ? this.primaryContainerColor() : this.surfaceColor())
-                    .fontColor(this.editor.categoryId === category.id ? this.onPrimaryContainerColor() : this.primaryTextColor())
+                    .backgroundColor(this.editor.categoryId === category.id ? this.accentSoftColor() : this.surfaceColor())
+                    .fontColor(this.editor.categoryId === category.id ? this.onAccentSoftColor() : this.primaryTextColor())
                     .onClick(() => this.setEditor({ categoryId: category.id }));
                 }, (category: AuthenticatorCategory) => category.id);
               }
@@ -3031,7 +3342,7 @@ struct Index {
           .fontSize(16)
           .backgroundColor(this.primaryColor())
           .fontColor('#FFFFFF')
-          .borderRadius(24)
+          .borderRadius(8)
           .padding({ left: 28, right: 28 })
           .onClick(() => this.saveAuthenticator());
       }
@@ -3042,7 +3353,7 @@ struct Index {
     .height('100%')
     .padding({ left: 16, right: 16 })
     .backgroundColor(this.pageColor())
-    .borderRadius({ topLeft: 28, topRight: 28 });
+    .borderRadius({ topLeft: 16, topRight: 16 });
   }
 
   @Builder
@@ -3053,17 +3364,19 @@ struct Index {
         this.password = '';
       });
       Column({ space: 12 }) {
-        Text(this.backupAction === 'export' ? '导出加密备份' :
+        Text(this.backupAction === 'export' ? '导出 FUN 加密备份' :
           this.backupAction === 'externalImport' ? `导入${labelForFormat(this.pendingExternalImportFormat)}备份` :
-            '导入备份')
+            this.backupAction === 'stratumImport' ? '导入 Stratum 文件' : '恢复 FUN 备份')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryTextColor());
         Text(this.backupAction === 'export'
-          ? '密码仅用于本次本机加密，不会保存或写入日志。'
+          ? '此格式仅供 FUN Authenticator 使用。密码仅用于本次加密，不会保存。'
           : this.backupAction === 'externalImport'
             ? '请输入来源应用备份密码。密码不会保存或写入日志。'
-            : '如备份已加密，请输入密码；明文 .stratum JSON 可留空。密码不会保存或写入日志。')
+            : this.backupAction === 'stratumImport'
+              ? '请输入 Stratum 备份密码；未加密的 JSON 备份可留空。密码不会保存。'
+              : '请输入 FUN 备份密码。密码不会保存。')
           .fontSize(13)
           .fontColor(this.secondaryTextColor());
         TextInput({ placeholder: '备份密码', text: this.password })
@@ -3093,7 +3406,7 @@ struct Index {
       .width('100%')
       .padding(22)
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 22, topRight: 22 });
+      .borderRadius({ topLeft: 12, topRight: 12 });
     }
     .width('100%')
     .height('100%')
@@ -3128,7 +3441,7 @@ struct Index {
       .width('100%')
       .padding(22)
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 22, topRight: 22 });
+      .borderRadius({ topLeft: 12, topRight: 12 });
     }
     .width('100%')
     .height('100%')
@@ -3163,7 +3476,7 @@ struct Index {
       .width('100%')
       .padding(22)
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 22, topRight: 22 });
+      .borderRadius({ topLeft: 12, topRight: 12 });
     }
     .width('100%')
     .height('100%')
@@ -3198,7 +3511,7 @@ struct Index {
       .width('100%')
       .padding(22)
       .backgroundColor(this.pageColor())
-      .borderRadius({ topLeft: 22, topRight: 22 });
+      .borderRadius({ topLeft: 12, topRight: 12 });
     }
     .width('100%')
     .height('100%')
@@ -3220,6 +3533,9 @@ struct Index {
       .height('100%')
       .backgroundColor(this.pageColor());
 
+      if (this.showCategoryMenu) {
+        this.categoryMenuSheet();
+      }
       if (this.showMainMenu) {
         this.mainMenuSheet();
       }
@@ -3228,6 +3544,9 @@ struct Index {
       }
       if (this.showImportMenu) {
         this.importMenuSheet();
+      }
+      if (this.showGuide) {
+        this.guideSheet();
       }
       if (this.showSortMenu) {
         this.sortMenu();
